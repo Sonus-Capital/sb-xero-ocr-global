@@ -1,11 +1,11 @@
-FROM apify/actor-node:16
+# Use the official Apify Node.js 20 runtime (stable, supported)
+FROM apify/actor-node:20
 
-# Copy package files and install production deps
-COPY package*.json ./
-RUN npm install --only=prod
-
-# Copy the rest of the code
+# Copy all project files, including .actor/
 COPY . ./
+
+# Install ONLY production dependencies
+RUN npm install --only=prod --no-optional
 
 # Start the actor
 CMD ["npm", "start"]
