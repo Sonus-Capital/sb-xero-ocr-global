@@ -1,10 +1,9 @@
 // main.js
-// CommonJS to avoid ESM warnings in Apify logs.
-const { Actor, log } = require('apify');
+import { Actor, log } from 'apify';
 
 /**
- * Tiny CSV parser (same style as your earlier OCR A).
- * Handles commas, quotes, newlines.
+ * Very small CSV parser (handles commas, quotes, newlines).
+ * Returns a matrix: [ [col1, col2, ...], [ ... ], ... ]
  */
 function parseCsv(text) {
     const rows = [];
@@ -40,14 +39,14 @@ function parseCsv(text) {
                 row = [];
                 field = '';
             } else if (c === '\r') {
-                // ignore CR
+                // ignore
             } else {
                 field += c;
             }
         }
     }
 
-    // flush last field / row
+    // flush last field/row
     row.push(field);
     if (row.length > 1 || (row.length === 1 && row[0] !== '')) {
         rows.push(row);
@@ -57,17 +56,19 @@ function parseCsv(text) {
 }
 
 /**
- * Convert CSV matrix to { headers, rows } with rows as objects keyed by header.
+ * Convert CSV matrix into { headers, rows } where rows is
+ * an array of objects keyed by header names.
  */
 function matrixToObjects(matrix) {
     if (!matrix.length) return { headers: [], rows: [] };
 
-    const headers = matrix[0].map(h => String(h ?? '').trim());
+    const headers = matrix[0].map((h) => String(h ?? '').trim());
     const outRows = [];
 
     for (let i = 1; i < matrix.length; i++) {
         const row = matrix[i];
-        if (!row || row.every(v => (v ?? '').toString().trim() === '')) continue;
+        // skip completely blank rows
+        if (!row || row.every((v) => (v ?? '').toString().trim() === '')) continue;
 
         const obj = {};
         headers.forEach((h, idx) => {
@@ -79,47 +80,32 @@ function matrixToObjects(matrix) {
     return { headers, rows: outRows };
 }
 
-/**
- * Placeholder OCR:
- * For now, we just attach stub fields.
- * Later you can plug in real Dropbox+OCR logic here.
- */
-async function runOcrForRow(row) {
-    // TODO: Replace this with real OCR integration
-    // using Dropbox path (row.Path_lower) + OCR engine.
-    return {
-        OCR_Status: 'SKIPPED',
-        OCR_Text: '',
-        OCR_Error: 'OCR not implemented yet in SB Xero OCR Global.'
-    };
-}
-
 Actor.main(async () => {
     try {
         log.info('*** SB Xero OCR GLOBAL: Actor.main started');
 
-        const input = (await Actor.getInput()) || {};
+        const input = (await Actor.getInput()) ?? {};
+        const maxFiles = input.maxFiles ?? null;
         const csvText = input.ocrTargetsCsv ? String(input.ocrTargetsCsv) : '';
-        const maxFiles = input.maxFiles != null ? Number(input.maxFiles) : null;
 
-        const csvProvided = !!csvText.trim();
         log.info('Input summary', {
-            csvProvided,
+            csvProvided: !!csvText,
             csvLength: csvText.length,
-            maxFiles
+            maxFiles,
         });
 
-        if (!csvProvided) {
+        if (!csvText.trim()) {
             log.warning('No ocrTargetsCsv provided or it is empty – exiting.');
             await Actor.setValue('OUTPUT', {
                 ok: false,
                 reason: 'NO_CSV',
                 maxFiles,
-                rowCount: 0
+                rowCount: 0,
             });
             return;
         }
 
+        // 1) Parse CSV safely
         let matrix;
         try {
             matrix = parseCsv(csvText);
@@ -129,7 +115,6 @@ Actor.main(async () => {
                 ok: false,
                 reason: 'PARSE_ERROR',
                 error: String(err.message || err),
-                maxFiles
             });
             return;
         }
@@ -137,73 +122,63 @@ Actor.main(async () => {
         const { headers, rows } = matrixToObjects(matrix);
         const totalRows = rows.length;
 
-        const limitNum =
-            maxFiles != null && !Number.isNaN(limitNum)
+        // 2) Respect maxFiles cap
+        const numericMax =
+            maxFiles != null && !Number.isNaN(Number(maxFiles))
                 ? Math.max(0, Number(maxFiles))
                 : totalRows;
 
-        const toProcess = rows.slice(0, limitNum);
+        const limitNum = Math.min(totalRows, numericMax);
+        const limitedRows = rows.slice(0, limitNum);
 
-        log.info('Parsed Global OCR targets CSV', {
+        // 3) Map from col1..col12 → canonical field names
+        // From 16+:
+        // Invoice_ID,Line_item_ID,Attachment_ID,Master_attachment_key,
+        // File_name,Drop_box_file_name,Path_lower,Xero_attachment_download_URL,
+        // Likely_tracking_horse,Xero_type,Xero_year,Target_type
+        const mappedRows = limitedRows.map((r) => ({
+            Invoice_ID: r.col1 ?? '',
+            Line_item_ID: r.col2 ?? '',
+            Attachment_ID: r.col3 ?? '',
+            Master_attachment_key: r.col4 ?? '',
+            File_name: r.col5 ?? '',
+            Drop_box_file_name: r.col6 ?? '',
+            Path_lower: r.col7 ?? '',
+            Xero_attachment_download_URL: r.col8 ?? '',
+            Likely_tracking_horse: r.col9 ?? '',
+            Xero_type: r.col10 ?? '',
+            Xero_year: r.col11 ?? '',
+            Target_type: r.col12 ?? '',
+        }));
+
+        log.info('Parsed global OCR targets CSV', {
             headers,
             totalRows,
-            processedRows: toProcess.length
+            limitNum,
+            processedRows: mappedRows.length,
         });
 
-        let processedCount = 0;
-        let errorCount = 0;
-
-        // Process rows sequentially for now (can batch later if needed).
-        for (const row of toProcess) {
-            try {
-                const ocrResult = await runOcrForRow(row);
-
-                const outputRow = {
-                    ...row,
-                    OCR_Status: ocrResult.OCR_Status,
-                    OCR_Text: ocrResult.OCR_Text,
-                    OCR_Error: ocrResult.OCR_Error
-                };
-
-                await Actor.pushData(outputRow);
-                processedCount += 1;
-            } catch (err) {
-                errorCount += 1;
-                log.error('Error during OCR for row', {
-                    message: err?.message,
-                    stack: err?.stack
-                });
-
-                const outputRow = {
-                    ...row,
-                    OCR_Status: 'ERROR',
-                    OCR_Text: '',
-                    OCR_Error: `Unhandled OCR error: ${String(err.message || err)}`
-                };
-
-                await Actor.pushData(outputRow);
-            }
+        // 4) For now, just push parsed/mapped rows to dataset
+        if (mappedRows.length) {
+            await Actor.pushData(mappedRows);
         }
 
         await Actor.setValue('OUTPUT', {
             ok: true,
-            message: 'Global OCR pipeline executed (OCR currently stubbed).',
+            message: 'Parsed global OCR targets CSV; OCR step not implemented yet.',
+            maxFiles,
             headers,
             totalRows,
-            processedRows: toProcess.length,
-            processedCount,
-            errorCount
+            processedRows: mappedRows.length,
         });
 
-        log.info('*** SB Xero OCR GLOBAL: Actor.main finished', {
-            processedCount,
-            errorCount
-        });
+        log.info('*** SB Xero OCR GLOBAL: Actor.main finished');
     } catch (err) {
+        // Catch absolutely everything so you don’t see “uncaught exception”
         log.error('SB Xero OCR GLOBAL – fatal error', {
             message: err?.message,
-            stack: err?.stack
+            stack: err?.stack,
         });
-        throw err; // Let Apify mark run as failed
+        throw err; // let Apify mark the run as failed
     }
 });
