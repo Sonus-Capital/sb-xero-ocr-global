@@ -1,0 +1,23 @@
+{
+  "title": "SB Xero OCR Global",
+  "description": "Run OCR across all global OCR targets.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "ocrTargetsCsv": {
+      "title": "Global OCR Targets CSV",
+      "type": "string",
+      "description": "Paste the full contents of Global_OCR_Targets.csv here (header row + all rows).",
+      "editor": "textarea"
+    },
+    "maxFiles": {
+      "title": "Max rows to process (optional)",
+      "type": "integer",
+      "description": "If set, only this many rows from the CSV will be processed.",
+      "editor": "number"
+    }
+  },
+  "required": [
+    "ocrTargetsCsv"
+  ]
+}
