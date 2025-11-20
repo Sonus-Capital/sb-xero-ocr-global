@@ -1,0 +1,12 @@
+{
+  "name": "sb-xero-ocr-global",
+  "version": "0.0.1",
+  "description": "Global OCR runner for SB Xero – consumes Global_OCR_Targets.csv and (later) performs OCR on each target.",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "apify": "^3.5.2"
+  }
+}
